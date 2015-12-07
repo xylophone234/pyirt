@@ -4,8 +4,11 @@ The model is an implementation of EM algorithm of IRT
 
 For reference, see:
 Brad Hanson, IRT Parameter Estimation using the EM Algorithm, 2000
+Eiji Muraki, A Generalized Partial Credit Model: Application of an EM Algorithm, 1992
+
 
 The current version only deals with unidimension theta
+The current version does not constrain slop in the multinomial case
 
 '''
 import numpy as np
@@ -24,7 +27,7 @@ class IRT_MMLE_2PL(object):
     (3) solve
     '''
 
-    def load_data(self, src, is_mount, user_name, tmp_dir='/tmp/pyirt/'):
+    def load_data(self, src):
         # three columns are uid, eid, atag
         if isinstance(src, file):
             # if the src is file handle
@@ -37,6 +40,7 @@ class IRT_MMLE_2PL(object):
 
         self.data_ref = loader.data_storage()
         self.data_ref.setup(uids, eids, atags)
+    
 
     def load_param(self, theta_bnds, alpha_bnds, beta_bnds):
         # TODO: allow for a more flexible parameter setting
@@ -303,13 +307,6 @@ class IRT_MMLE_2PL(object):
             posterior = np.exp(log_joint_prob_vec - marginal)
             return posterior
 
-        """
-        def parallel_update(logs, ntheta, theta_prior, theta_density, item_param, num_user):
-
-            posterior_vec = Parallel(n_jobs = 4) (delayed(update)(logs[i],
-                                        ntheta, theta_prior, theta_density, item_param) for i in range(num_user))
-            return posterior_vec
-        """
 
         # [A] calculate p(data,param|theta)
         # TODO: speed it up
@@ -317,20 +314,7 @@ class IRT_MMLE_2PL(object):
             self.posterior_theta_distr[i, :] = update(self.data_ref.get_log(self.data_ref.uid_vec[i]),
                                                       self.num_theta, self.theta_prior_val, self.theta_density,
                                                       self.item_param_dict)
-        '''
-        # create temporay variable for the loops
-        ntheta = self.num_theta
-        theta_prior = self.theta_prior_val
-        theta_density = self.theta_density
-        item_param = self.item_param_dict
-        num_user = self.data_ref.num_user
-        logs = [self.data_ref.get_log(self.data_ref.uid_vec[i]) for i in range(num_user)]
-        import ipdb; ipdb.set_trace()  # XXX BREAKPOINT
-        posterior_vec = parallel_update(logs, ntheta, theta_prior, theta_density, item_param, num_user)
 
-        for i in xrange(self.data_ref.num_user):
-            self.posterior_theta_distr[i,:] = np.exp(posterior_vec[i])
-        '''
         # When the loop finish, check if the theta_density adds up to unity for each user
         check_user_distr_marginal = np.sum(self.posterior_theta_distr, axis=1)
         if any(abs(check_user_distr_marginal - 1.0) > 0.0001):
@@ -373,38 +357,4 @@ class IRT_MMLE_2PL(object):
         return ell
 
     def __calc_theta(self):
-        self.theta_vec = np.dot(self.posterior_theta_distr, self.theta_prior_val)
-
-    '''
-    Experimental
-    def update_guess_param(self):
-        # at the end of each repetition, try to update the distribution of c
-
-        #C is only identified at the extreme right tail, which is not possible in the EM environment
-        #Use the average performance of the worst ability
-
-        raise Exception('Currently deprecated!')
-
-        # find the user that are in the bottom 5%
-        cut_threshold = np.percentile(self.theta_vec, 5)
-        bottom_group = [i for i in range(self.data_ref.num_user) if self.theta_vec[i] <= cut_threshold]
-
-        # now loop through all the items
-        for eid in self.data_ref.eid_vec:
-
-            if self.item_param_dict[eid]['update_c']:
-                # find the user group
-                user_group = self.eid2uid_dict[eid]
-                guessers = set(user_group).intersection(bottom_group)
-                num_guesser = len(guessers)
-                if num_guesser>10:
-                    # average them
-                    rw_list = self.right_wrong_map[eid]
-                    right_cnt = 0.0
-                    for uid in guessers:
-                        if uid in rw_list['right']:
-                            right_cnt += 1
-                    # update c
-                    # cap at 0.5
-                    self.item_param_dict[eid]['c'] = min(right_cnt/num_guesser, 0.5)
-    '''
+        self.theta_vec = np.dot(self.posterior_theta_distr, self.theta_prior_val) 
