@@ -28,19 +28,24 @@ class IRT_MMLE_2PL(object):
     '''
 
     def load_data(self, src):
-        # three columns are uid, eid, atag
+        '''
+        # Input file data fields:
+        uid: user id, int
+        eid: item id, int
+        grade: user's score on the item, non-negative int
+        '''
         if isinstance(src, file):
             # if the src is file handle
-            uids, eids, atags = self._loadFromHandle(src)
+            uids, eids, grades = loader.LoadFromHandle(src)
         else:
             # if the src is list of tuples
-            uids, eids, atags = self._loadFromTuples(src)
+            uids, eids, grades = loader.LoadFromTuples(src)
         # process it
-        print('Data loading is complete.')
+        print('Data are loaded.')
 
-        self.data_ref = loader.data_storage()
-        self.data_ref.setup(uids, eids, atags)
-    
+        self.data_ref = loader.data_storage(uids, eids, grades)
+        print('Data are preprocessed.')
+
 
     def load_param(self, theta_bnds, alpha_bnds, beta_bnds):
         # TODO: allow for a more flexible parameter setting
@@ -212,35 +217,6 @@ class IRT_MMLE_2PL(object):
     Auxuliary function
     '''
 
-    def _loadFromTuples(self, data):
-        uids = []
-        eids = []
-        atags = []
-        if len(data) == 0:
-            raise Exception('Data is empty.')
-
-        for log in data:
-            uids.append(int(log[0]))
-            eids.append(int(log[1]))
-            atags.append(int(log[2]))
-
-        return uids, eids, atags
-
-    def _loadFromHandle(self, fp, sep=','):
-        # Default format is comma separated files,
-        # Only int is allowed within the environment
-        uids = []
-        eids = []
-        atags = []
-
-        for line in fp:
-            if line == '':
-                continue
-            uidstr, eidstr, atagstr = line.strip().split(sep)
-            uids.append(int(uidstr))
-            eids.append(int(eidstr))
-            atags.append(int(atagstr))
-        return uids, eids, atags
 
     def _init_solver_param(self, is_constrained, boundary,
                            solver_type, max_iter, tol):
@@ -289,11 +265,11 @@ class IRT_MMLE_2PL(object):
                 ell       = 0.0
                 for log in log_list:
                     eid   = log[0]
-                    atag  = log[1]
+                    grade  = log[1]
                     alpha = item_param_dict[eid]['alpha']
                     beta  = item_param_dict[eid]['beta']
                     c     = item_param_dict[eid]['c']
-                    ell   += clib.log_likelihood_2PL(atag, 1.0 - atag,
+                    ell   += clib.log_likelihood_2PL(grade, 1.0 - grade,
                                                      theta, alpha, beta, c)
 
                 # now update the density
@@ -347,12 +323,12 @@ class IRT_MMLE_2PL(object):
             logs = self.data_ref.get_log(uid)
             for log in logs:
                 eid = log[0]
-                atag = log[1]
+                grade = log[1]
                 alpha = self.item_param_dict[eid]['alpha']
                 beta = self.item_param_dict[eid]['beta']
                 c = self.item_param_dict[eid]['c']
 
-                ell += clib.log_likelihood_2PL(atag, 1 - atag,
+                ell += clib.log_likelihood_2PL(grade, 1 - grade,
                                                theta, alpha, beta, c)
         return ell
 

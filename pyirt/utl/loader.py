@@ -15,7 +15,151 @@ import subprocess
 
 import collections as cos
 
+def load_tuples(data):
+    '''
+    # Input: python tuple (uid, eid, grade)
+    # Only int is allowed in the environment
+    '''
+    uids = []
+    eids = []
+    grades = []
+    if len(data) == 0:
+        raise ValueError('Input is empty.')
 
+    for log in data:
+        uids.append(int(log[0]))
+        eids.append(int(log[1]))
+        grades.append(int(log[2]))
+
+    return uids, eids, grades
+
+def load_file_handle(file_path, sep=','):
+    '''
+    # Input file fields: uid, eid, grade. Default comma separated.
+    # Only int is allowed in the environment
+    '''
+    uids = []
+    eids = []
+    grades = []
+
+    with open(file_path) as f:
+        for line in f:
+            if line == '':
+                continue
+            uidstr, eidstr, gradestr = line.strip().split(sep)
+            uids.append(int(uidstr))
+            eids.append(int(eidstr))
+            grades.append(int(gradestr))
+    return uids, eids, grades
+
+
+def map_response2grade(eids, responses):
+    '''
+    Map item's response to grade category
+    Because multinomial is essentially rank order utility, reorder the data as 0-J
+    
+    Depends on init_item_user_map
+    '''
+    #TODO: deal with perfect prediction
+    
+    # reduce 
+    unique_item_response_combo = set(zip(eids, responses))
+    item2response = cos.defaultdict(list)
+    for item_response_pair in unique_item_response_combo:
+        item2response[item_response_pair[0]].append(item_response_pair[1])
+
+    # map
+    response2grade = {}
+    grade2response = {}
+    for eid, responses in item2response.iteritems():
+        response2grade[eid] = dict((response, j) for j, response in enumerate(sorted(responses)))
+        grade2response[eid] = dict((j, response) for j, response in enumerate(sorted(responses)))
+
+    return response2grade,grade2response
+
+
+def map_ids(ids):
+    # map unique ids to 0-N dict
+    unique_ids = list(set(ids))
+    n = len(unique_ids)
+    id_map = dict(zip(unique_ids, xrange(n)))
+    id_reverse_map = dict(zip(xrange(n),unique_ids))
+
+    return id_map, id_reverse_map
+
+
+class data_storage(object):
+    '''
+    map user ids to 0-N idx (uids)
+    map item ids to 0-M idx (eids)
+    map response of each item to 0-J idx(grade)
+
+    In relationship map, x2y means project x to cell of y. 
+    For example, user2item = list(list(uid)), the outer list is indexed by eid
+    The list index is valid after the item map.
+    '''
+
+    def __init__(self, user_ids, item_ids, responses):
+
+        # check input
+        self.num_log = len(user_ids)
+        if len(item_ids) != self.num_log or len(responses) != self.num_log:
+            raise ValueError('Input data are not the same length')
+
+        # map user and item ids
+        self.user_map, self.user_reverse_map = map_ids(user_ids)
+        self.item_map, self.item_reverse_map = map_ids(item_ids)
+        # translate
+        uids = [self.user_map[x] for x in user_ids]
+        eids = [self.item_map[y] for y in item_ids]
+        # generate auxilary parameters, later used in _map_item_user
+        self.num_user = len(self.user_map.keys())
+        self.num_item = len(self.item_map.keys())
+       
+        # map responses
+        self.response_map, self.response_reverse_map = map_response2grade(eids, responses)
+        # translate
+        grades = [self.response_map[eids[i]][responses[i]] for i in xrange(self.num_log)]
+
+        # map user2item and item2user
+        self._map_item_user(uids, eids, grades)
+
+        # map user2grade*item 
+        self._map_user2grade_item()
+
+
+    def _map_item_user(self, uids, eids, grades):
+        num_log = self.num_log
+        num_user = self.num_user
+        num_item = self.num_item
+
+        # initialize
+        self.item2user = [[] for x in xrange(num_user)]
+        self.user2item = [[] for y in xrange(num_item)]
+
+        for i in xrange(num_log):
+            eid = eids[i]; uid = uids[i]; grade = grades[i]
+            self.item2user[uid].append((eid, grade))
+            self.user2item[eid].append((uid, grade))
+
+
+    def _map_user2grade_item(self):
+        self.user2grade_item = cos.defaultdict(dict)
+        # initialize
+        for eid, response_dict in self.response_map.iteritems():
+            for j in response_dict.itervalues():
+                self.user2grade_item[eid][j] = []
+
+        # fill
+        for eid in range(len(self.user2item)):
+            for log in self.user2item[eid]:
+                uid = log[0]; grade = log[1]
+                self.user2grade_item[eid][grade].append(uid) 
+        
+
+'''
+Legacy Code
+'''
 def from_matrix_to_list(indata_file, sep=',', header=False, is_uid=False):
     # assume the data takes the following format
     # (uid,) item1, item2, item3
@@ -58,26 +202,6 @@ def from_matrix_to_list(indata_file, sep=',', header=False, is_uid=False):
 
     return result_list
 
-
-def load_sim_data(sim_data_file):
-    # this function loads the simulation data for testing
-    # the sim format is
-    #(result, uid, eid, theta, beta, alpha)
-    test_data = []
-    test_param = {}
-    # the outputs are [a] solver readable dataset, [b] item parameter
-    with open(sim_data_file, 'r') as f:
-        for line in f:
-            if line.strip() == '':
-                continue
-
-            result, uid, eid, theta, beta, alpha = line.strip().split(',')
-            test_data.append((int(uid), int(eid), int(result)))
-            if eid not in test_param:
-                test_param[int(eid)] = {'alpha': float(alpha), 'beta': float(beta)}
-    return test_data, test_param
-
-
 def parse_item_paramer(item_param_dict, output_file=None):
 
     if output_file is not None:
@@ -94,72 +218,3 @@ def parse_item_paramer(item_param_dict, output_file=None):
             print eid, alpha_val, beta_val
         else:
             out_fh.write('{},{},{}\n'.format(eid, alpha_val, beta_val))
-
-class data_storage(object):
-
-    def setup(self, uids, eids, atags):
-        # pre processing
-        self._process_data_memory(uids, eids, atags)
-
-        self._init_data_param()
-        print("--- Process: %f secs ---" % np.round((time.time() - start_time)))
-
-       # initialize some intermediate variables used in the E step
-        start_time = time.time()
-        self._init_right_wrong_map_memory()
-        print("--- Sparse Mapping: %f secs ---" % np.round((time.time() - start_time)))
-
-    '''
-    Need the following dictionary for esitmation routine
-    (1) item -> user: key: eid, value: (uid, atag)
-    (2) user -> item: key: uid, value: (eid, atag)
-    '''
-
-    def _process_data_memory(self, uids, eids, atags):
-        self.num_log = len(uids)
-        self.item2user = cos.defaultdict(list)
-        self.user2item = cos.defaultdict(list)
-
-        for i in xrange(self.num_log):
-            eid = eids[i]
-            uid = uids[i]
-            atag = atags[i]
-            # add to the data dictionary
-            self.item2user[eid].append((uid, atag))
-            self.user2item[uid].append((eid, atag))
-
-    def _init_right_wrong_map_memory(self):
-        self.right_map = cos.defaultdict(list)
-        self.wrong_map = cos.defaultdict(list)
-
-        for eid, log_result in self.item2user.iteritems():
-            for log in log_result:
-                atag = log[1]
-                uid = log[0]
-                uid_idx = self.uidx[uid]
-                if atag == 1:
-                    self.right_map[eid].append(uid_idx)
-                else:
-                    self.wrong_map[eid].append(uid_idx)
-
-    def _init_data_param(self):
-        # system parameter
-        self.uid_vec = [int(x) for x in self.user2item.keys()]
-        self.num_user = len(self.uid_vec)
-        self.eid_vec = [int(x) for x in self.item2user.keys()]
-        self.num_item = len(self.eid_vec)
-
-        # build a dictionary for fast uid index, which is used in map
-        self.uidx = dict(zip(self.uid_vec, xrange(len(self.uid_vec))))
-        self.eidx = dict(zip(self.eid_vec, xrange(len(self.eid_vec))))
-
-    def get_log(self, uid):
-
-        log_list = self.user2item[uid]
-
-        return log_list
-
-    def get_rwmap(self, eid):
-        right_uid_vec = self.right_map[eid]
-        wrong_uid_vec = self.wrong_map[eid]
-        return right_uid_vec, wrong_uid_vec
