@@ -9,9 +9,15 @@ Eiji Muraki, A Generalized Partial Credit Model: Application of an EM Algorithm,
 
 The current version only deals with unidimension theta
 The current version does not constrain slop in the multinomial case
+The current version does not prevent perfect prediction
+The current version only deal with ordered data, e.g. [2,4,5] will be mapped as [0,1,2]
+
+If the item has dichotomous response, allow to set the guess parameter
+If the item has polytomous response, does not allow set the guess parameter
 
 '''
 import numpy as np
+from scipy.stats import norm
 import time
 
 from ..utl import clib, tools, loader
@@ -29,28 +35,48 @@ class IRT_MMLE_2PL(object):
 
     def load_data(self, src):
         '''
-        # Input file data fields:
-        uid: user id, int
-        eid: item id, int
-        grade: user's score on the item, non-negative int
+        # Input:
+        user id, int or string
+        item id, int or string
+        response: user's answer to item, int or string
+        
+        # Output:
+        1. Element map: user(_reverse)_map, item(_reverse)_map, response(_reverse)_map
+           Translate between data index and the class index.
+        
+        2. Relation map: user2item, item2user, user2grade_item
+           Cache frequently used maps.
         '''
-        if isinstance(src, file):
+
+        # TODO: map the choice of src in loader
+        if isinstance(src, basestring):  # assume a valid path 
             # if the src is file handle
-            uids, eids, grades = loader.LoadFromHandle(src)
+            user_ids, item_ids, responses = loader.load_file_handle(src)
         else:
             # if the src is list of tuples
-            uids, eids, grades = loader.LoadFromTuples(src)
-        # process it
+            user_ids, item_ids, responses = loader.load_tuples(src)
         print('Data are loaded.')
 
-        self.data_ref = loader.data_storage(uids, eids, grades)
+        self.data_ref = loader.data_storage(user_ids, item_ids, responses)
         print('Data are preprocessed.')
 
 
     def load_param(self, theta_bnds, alpha_bnds, beta_bnds):
-        # TODO: allow for a more flexible parameter setting
-        # The config object has to be passed in because hdfs file system does
-        # not load target file
+
+        '''
+        # Input:
+        1. theta_bnds: the range value for the latent ability. The package suggests [-4,4].
+        2. alpha_bnds: the range value for item discrimination. The package suggests a lower bound of 0.25 and upper bound of 2 for each response component
+        3. beta_bnds: the range value for item difficulty. The package suggests a range smaller than that of theta.
+
+        # Output:
+        1. Prior distribution of theta. 
+        Value grid is default to be 11. The prior distribution is normal N(0, range/4)
+        2. Solver choice:
+        Default solver is BFGS. If failed to converge, try L-BFGS-B
+        Dichotomous solver and polytomous solver uses different log-likelihood function
+        '''
+        # TODO: allow for a structured constraints on alpha
 
         # load user item
         num_theta = 11
@@ -150,17 +176,10 @@ class IRT_MMLE_2PL(object):
     def _exp_step(self):
         '''
         Basic Math:
-        In the maximization step, need to use E_[j,k](Y=1),E_[j,k](Y=0)
-        E(Y=1|param_j,theta_k) = sum_i(data_[i,j]*P(Y=1|param_j,theta_[i,k]))
-        since data_[i,j] = 0/1, it is equivalent to sum all done right users
-
-        E(Y=0|param_j,theta_k) = sum_i(
-                                (1-data_[i,j]) *(1-P(Y=1|param_j,theta_[i,k])
-                                    )
-        By similar logic, it is equivalent to sum (1-p) for all done wrong users
-
+        Take expecation of the log likelihood (L).
+        Since L is linear additive, its expectation is also linear additive.
         '''
-
+        # TODO: better math explanation
         # (1) update the posterior distribution of theta
         self.__update_theta_distr()
 
@@ -182,7 +201,7 @@ class IRT_MMLE_2PL(object):
         opt_worker.set_bounds([self.beta_bnds, self.alpha_bnds])
 
         # theta value is universal
-        opt_worker.set_theta(self.theta_prior_val)
+        opt_worker.set_theta(self.theta_val)
 
         for eid in self.data_ref.eid_vec:
             # set the initial guess as a mixture of current value and a new
@@ -220,6 +239,8 @@ class IRT_MMLE_2PL(object):
 
     def _init_solver_param(self, is_constrained, boundary,
                            solver_type, max_iter, tol):
+
+        # TODO:separate bnds for dichotomous and polytomous
         # initialize bounds
         self.is_constrained = is_constrained
         self.alpha_bnds = boundary['alpha']
@@ -232,24 +253,28 @@ class IRT_MMLE_2PL(object):
             raise Exception('BFGS has to be constrained')
 
     def _init_item_param(self):
-        self.item_param_dict = {}
-        for eid in self.data_ref.eid_vec:
-            # need to call the old eid
-            c = self.guess_param_dict[eid]['c']
 
-            self.item_param_dict[eid] = {'alpha': 1.0, 'beta': 0.0, 'c': c}
+        # follow MNlogit's convention, the parameters [b,a]
+        # guess parameter is not considered here
+        self.item_param_dict = {}
+        for eid, responses in self.data_ref.response_map:
+            J = len(responses.keys())
+            self.item_param_dict[eid] = np.column_stack((np.zeros((J,1)),np.zeros(J,1))).T
 
     def _init_user_param(self, theta_min, theta_max, num_theta):
-        self.theta_prior_val = np.linspace(theta_min, theta_max, num=num_theta)
-        self.num_theta = len(self.theta_prior_val)
-        if self.num_theta != num_theta:
-            raise Exception('Theta initialization failed')
-        # store the prior density
-        self.theta_density = np.ones(num_theta) / num_theta
+        self.theta_val = np.linspace(theta_min, theta_max, num=num_theta)
+        self.num_theta = num_theta
+
+        # prior density normal, make it fat
+        sd = (theta_max - theta_min)/2.0
+
+        theta_prior_normal_pdf = [norm.pdf(x, scale=sd) for x in self.theta_val]
+        self.theta_prior_density = [x/sum(theta_prior_normal_pdf) for x in theta_prior_normal_pdf]  # normalize
+
 
     def __update_theta_distr(self):
 
-        def update(log_list, num_theta, theta_prior_val, theta_density, item_param_dict):
+        def update(log_list, num_theta, theta_val, theta_density, item_param_dict):
             '''
             Basic Math. Notice that the distribution is user specific
                 P_t(theta,data_i,param) = p(data_i,param|theta)*p_[t-1](theta)
@@ -260,7 +285,7 @@ class IRT_MMLE_2PL(object):
             likelihood_vec = np.zeros(num_theta)
             # calculate
             for k in xrange(num_theta):
-                theta     = theta_prior_val[k]
+                theta     = theta_val[k]
                 # calculate the likelihood
                 ell       = 0.0
                 for log in log_list:
@@ -288,7 +313,7 @@ class IRT_MMLE_2PL(object):
         # TODO: speed it up
         for i in xrange(self.data_ref.num_user):
             self.posterior_theta_distr[i, :] = update(self.data_ref.get_log(self.data_ref.uid_vec[i]),
-                                                      self.num_theta, self.theta_prior_val, self.theta_density,
+                                                      self.num_theta, self.theta_val, self.theta_density,
                                                       self.item_param_dict)
 
         # When the loop finish, check if the theta_density adds up to unity for each user
@@ -333,4 +358,4 @@ class IRT_MMLE_2PL(object):
         return ell
 
     def __calc_theta(self):
-        self.theta_vec = np.dot(self.posterior_theta_distr, self.theta_prior_val) 
+        self.theta_vec = np.dot(self.posterior_theta_distr, self.theta_val) 

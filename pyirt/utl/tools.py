@@ -9,6 +9,38 @@ Created on 2015/1/2
 import numpy as np
 
 
+def get_grade_prob(theta, As, Bs,c = None):
+    J = len(Bs)
+    if J < 1:
+        raise ValueError('Beta vector is empty.')
+    if J != len(As):
+        raise ValueError('Alpha and beta have different length')
+
+
+
+    if c is not None:
+        # if guess parameter is specified, use the two parameter IRT
+        if J != 1:
+            raise TypeError('Only dichotomous response can specify guess parameter')
+        # TODO: make IRT parameter comparable to MNLogit
+        prob_vec = [c, c + (1.0 - c) / (1 + np.exp(-(alpha * theta + beta)))]
+    else:
+        ps = [1]
+        # otherwise use the full specification
+        for i in range(J):
+            p = exp(sum([As[k]*theta+Bs[k] for k in range(i+1)]))
+            ps.append(p)
+        G = sum(ps)
+        prob_vec = [p/G for p in ps]
+    
+    return prob_vec
+
+
+
+
+'''
+Legacy code
+'''
 def irt_fnc(theta, beta, alpha=1.0, c=0.0):
     # beta is item difficulty
     # theta is respondent capability
