@@ -6,7 +6,6 @@ syntax: glob
 *.json
 data/log
 data/input
-data
 literature
 repetition_graph
 documentation

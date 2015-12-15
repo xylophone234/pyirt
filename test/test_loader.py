@@ -7,7 +7,7 @@ sys.path.insert(0, RootDir)
 
 
 import unittest
-from pyirt.utl import  loader
+from pyirt.utl import loader
 
 class TestMapResponse2Grade(unittest.TestCase):
     def setUp(self):

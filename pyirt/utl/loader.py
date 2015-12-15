@@ -75,7 +75,7 @@ def map_response2grade(eids, responses):
         response2grade[eid] = dict((response, j) for j, response in enumerate(sorted(responses)))
         grade2response[eid] = dict((j, response) for j, response in enumerate(sorted(responses)))
 
-    return response2grade,grade2response
+    return response2grade, grade2response
 
 
 def map_ids(ids):

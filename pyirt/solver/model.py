@@ -58,6 +58,8 @@ class IRT_MMLE_2PL(object):
         print('Data are loaded.')
 
         self.data_ref = loader.data_storage(user_ids, item_ids, responses)
+
+        self._init_item_param()
         print('Data are preprocessed.')
 
 
@@ -93,23 +95,22 @@ class IRT_MMLE_2PL(object):
 
         self._init_solver_param(is_constrained, boundary, solver_type, max_iter, tol)
 
-    def load_guess_param(self, in_guess_param):
-        if isinstance(in_guess_param, basestring):
-            # all c are 0
-            guess_param_dict = {}
-            for eid in self.data_ref.eid_vec:
-                guess_param_dict[eid] = {'c': 0.0}
-        else:
-            guess_param_dict = in_guess_param
 
-        self.guess_param_dict = guess_param_dict
+
+    def load_guess_param(self, in_guess_param):
+        '''
+        Input:
+        in_guess_param: dictionary index by original eid
+        '''
+        for out_eid, c in in_guess_param.iteritems():
+            # translate eid
+            eid = self.data_ref.item_map[out_eid]
+            # update
+            self.item_param_dict[eid]['C'] = c
 
     def solve_EM(self):
         # create the inner parameters
-        # currently item parameter requires no setup
-        self._init_item_param()
-
-        self.posterior_theta_distr = np.zeros((self.data_ref.num_user, self.num_theta))
+        self.theta_distr = np.zeros((self.data_ref.num_user, self.num_theta))
 
         # TODO: enable the stopping condition
         num_iter = 1
@@ -257,9 +258,13 @@ class IRT_MMLE_2PL(object):
         # follow MNlogit's convention, the parameters [b,a]
         # guess parameter is not considered here
         self.item_param_dict = {}
-        for eid, responses in self.data_ref.response_map:
+        for eid, responses in self.data_ref.response_map.iteritems():
             J = len(responses.keys())
-            self.item_param_dict[eid] = np.column_stack((np.zeros((J,1)),np.zeros(J,1))).T
+            # Bs and As
+            Bs = np.zeros((J-1, 1))
+            As = np.ones((J-1, 1))
+            self.item_param_dict[eid] = {'ab': np.column_stack((Bs, As)).T,
+                                         'c': None}
 
     def _init_user_param(self, theta_min, theta_max, num_theta):
         self.theta_val = np.linspace(theta_min, theta_max, num=num_theta)
@@ -269,57 +274,20 @@ class IRT_MMLE_2PL(object):
         sd = (theta_max - theta_min)/2.0
 
         theta_prior_normal_pdf = [norm.pdf(x, scale=sd) for x in self.theta_val]
-        self.theta_prior_density = [x/sum(theta_prior_normal_pdf) for x in theta_prior_normal_pdf]  # normalize
+        # N*1 * 1*S array
+        prior_density = [x/sum(theta_prior_normal_pdf) for x in theta_prior_normal_pdf]  # normalize
+        self.theta_density = np.dot(np.ones((self.data_ref.num_user,1)), np.array(prior_density)[None,:])
+
 
 
     def __update_theta_distr(self):
-
-        def update(log_list, num_theta, theta_val, theta_density, item_param_dict):
-            '''
-            Basic Math. Notice that the distribution is user specific
-                P_t(theta,data_i,param) = p(data_i,param|theta)*p_[t-1](theta)
-                p_t(data_i,param) = sum(p_t(theta,data_i,param)) over theta
-                p_t(theta|data_i,param) = P_t(theta,data_i,param)/p_t(data_i,param)
-            '''
-            # find all the items
-            likelihood_vec = np.zeros(num_theta)
-            # calculate
-            for k in xrange(num_theta):
-                theta     = theta_val[k]
-                # calculate the likelihood
-                ell       = 0.0
-                for log in log_list:
-                    eid   = log[0]
-                    grade  = log[1]
-                    alpha = item_param_dict[eid]['alpha']
-                    beta  = item_param_dict[eid]['beta']
-                    c     = item_param_dict[eid]['c']
-                    ell   += clib.log_likelihood_2PL(grade, 1.0 - grade,
-                                                     theta, alpha, beta, c)
-
-                # now update the density
-                likelihood_vec[k] = ell
-            # ell  = p(param|x), full joint = logp(param|x)+log(x)
-            log_joint_prob_vec = likelihood_vec + np.log(theta_density)
-
-            # calculate the posterior
-            # p(x|param) = exp(logp(param,x) - log(sum p(param,x)))
-            marginal = tools.logsum(log_joint_prob_vec)
-            posterior = np.exp(log_joint_prob_vec - marginal)
-            return posterior
-
-
-        # [A] calculate p(data,param|theta)
-        # TODO: speed it up
         for i in xrange(self.data_ref.num_user):
-            self.posterior_theta_distr[i, :] = update(self.data_ref.get_log(self.data_ref.uid_vec[i]),
-                                                      self.num_theta, self.theta_val, self.theta_density,
-                                                      self.item_param_dict)
+            full_ll_array = np.log(self.theta_density[i, :])
+            for s in range(self.num_theta):
+                full_ll_array[s] += tools.get_conditional_loglikelihood(self.data_ref.item2user[i], self.theta_val[s],
+                                                         self.item_param_dict)
 
-        # When the loop finish, check if the theta_density adds up to unity for each user
-        check_user_distr_marginal = np.sum(self.posterior_theta_distr, axis=1)
-        if any(abs(check_user_distr_marginal - 1.0) > 0.0001):
-            raise Exception('The posterior distribution of user ability is not proper')
+            self.theta_density[i, :] = tools.update_posterior_distribution(full_ll_array)
 
     def __get_expect_count(self):
 
@@ -334,8 +302,8 @@ class IRT_MMLE_2PL(object):
             # condition on the posterior ability, what is the expected count of
             # students get it right
             # TODO: for readability, should specify the rows and columns
-            self.item_expected_right_bytheta[:, j] = np.sum(self.posterior_theta_distr[right_uid_vec, :], axis=0)
-            self.item_expected_wrong_bytheta[:, j] = np.sum(self.posterior_theta_distr[wrong_uid_vec, :], axis=0)
+            self.item_expected_right_bytheta[:, j] = np.sum(self.theta_density[right_uid_vec, :], axis=0)
+            self.item_expected_wrong_bytheta[:, j] = np.sum(self.theta_density[wrong_uid_vec, :], axis=0)
 
     def __calc_data_likelihood(self):
         # calculate the likelihood for the data set
@@ -358,4 +326,4 @@ class IRT_MMLE_2PL(object):
         return ell
 
     def __calc_theta(self):
-        self.theta_vec = np.dot(self.posterior_theta_distr, self.theta_val) 
+        self.theta_vec = np.dot(self.theta_density, self.theta_val) 

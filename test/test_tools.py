@@ -11,26 +11,78 @@ import math
 import numpy as np
 
 
-class TestIrtFunctions(unittest.TestCase):
-
-    def test_irt_fnc(self):
+class TestGradeProb(unittest.TestCase):
+    def test_dichotomous(self):
         # make sure the shuffled sequence does not lose any elements
-        prob = tools.irt_fnc(0.0, 0.0, 1.0)
-        self.assertEqual(prob, 0.5)
+        prob = tools.get_grade_prob(0.0, [1.0], [0.0])
+        self.assertEqual(prob[1], 0.5)
         # alpha should play no role
-        prob = tools.irt_fnc(0.0, 0.0, 2.0)
-        self.assertEqual(prob, 0.5)
+        prob = tools.get_grade_prob(0.0, [2.0], [0.0])
+        self.assertEqual(prob[1], 0.5)
         # higher theta should have higher prob
-        prob = tools.irt_fnc(1.0, 0.0, 1.0)
-        self.assertEqual(prob, 1.0 / (1.0 + math.exp(-1.0)))
+        prob = tools.get_grade_prob(1.0, [1.0], [0.0])
+        self.assertEqual(prob[1], 1.0 / (1.0 + math.exp(-1.0)))
         # cancel out by higher beta
-        prob = tools.irt_fnc(1.0, -1.0, 1.0)
-        self.assertEqual(prob, 0.5)
+        prob = tools.get_grade_prob(1.0, [1.0], [-1.0])
+        self.assertEqual(prob[1], 0.5)
         # test for c as limit situation
-        prob = tools.irt_fnc(-99, 0.0, 1.0, 0.25)
-        self.assertTrue(abs(prob - 0.25) < 1e-5)
-        prob = tools.irt_fnc(99, 0.0, 1.0, 0.25)
-        self.assertTrue(abs(prob - 1.0) < 1e-5)
+        prob = tools.get_grade_prob(-99, [1.0], [0.0], c=0.25)
+        self.assertTrue(abs(prob[1] - 0.25) < 1e-5)
+        prob = tools.get_grade_prob(99, [1.0], [0.0], c=0.25)
+        self.assertTrue(abs(prob[1] - 1.0) < 1e-5)
+        prob = tools.get_grade_prob(1.0, [0.0], [1.0], c=0.25)
+        self.assertTrue(abs(prob[1] - (0.25+0.75/(1+math.exp(-1.0))))< 1e-5)
+
+       
+    def test_polynotomous(self):
+        As = [1.0, 2.0]
+        Bs = [1.0, 2.0]
+        prob = tools.get_grade_prob(1.0, As, Bs)
+        true_prob_vec = [1/(1+math.exp(2)+math.exp(6)), 
+                         math.exp(2)/(1+math.exp(2)+math.exp(6)),
+                         math.exp(6)/(1+math.exp(2)+math.exp(6))]
+
+        self.assertEquals(prob, true_prob_vec)
+
+        As = [1.0, 0.0]
+        Bs = [0.0, 2.0]
+        prob = tools.get_grade_prob(1.0, As, Bs)
+        true_prob_vec = [1/(1+math.exp(1)+math.exp(3)), 
+                         math.exp(1)/(1+math.exp(1)+math.exp(3)),
+                         math.exp(3)/(1+math.exp(1)+math.exp(3))]
+
+        self.assertEquals(prob, true_prob_vec)
+
+
+class TestGetConditionalLikelihood(unittest.TestCase):
+    def setUp(self):
+        self.item_param_dict = {0: {'ab': np.array([[1.0, 1.0], [1.0, 1.0]]),
+                                    'c': None},
+                                1: {'ab': np.array([[1.0], [1.0]]),
+                                    'c': 0.25}}
+        self.records = [[0, 2], [1, 0]]
+
+    def test_eval(self):
+        ll_0 = tools.get_conditional_loglikelihood(self.records, 0.0,
+               =`=jedi=0,                     =`= (*_*x*_*, base=None) =`=jedi=`=                self.item_param_dict)
+        true_ll_0 = math.log(math.exp(2.0)/(1+math.exp(1.0)+math.exp(2.0))*(0.75-0.75/(1+math.exp(-1.0))))
+        self.assertTrue(abs(ll_0 - true_ll_0) < 1e-8)
+
+        ll_1 = tools.get_conditional_loglikelihood(self.records, 1.0,
+                                                   self.item_param_dict)
+        true_ll_1 = math.log(math.exp(4.0)/(1+math.exp(2.0)+math.exp(4.0))*(0.75-0.75/(1+math.exp(-2.0))))
+        self.assertTrue(abs(ll_1 - true_ll_1) < 1e-8)
+
+
+class TestUpdatePosteriorDistribution(unittest.TestCase):
+    def test_update(self):
+        posterior = tools.update_posterior_distribution(np.log(np.array([0.178, 0.02, 0.002])))
+        true_posterior = np.array([0.89, 0.1, 0.01])
+
+        self.assertTrue(sum(abs(posterior - true_posterior)) < 1e-8)
+
+
+class TestIrtFunctions(unittest.TestCase):
 
     def test_log_likelihood(self):
         # raise error
