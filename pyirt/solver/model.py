@@ -180,7 +180,6 @@ class IRT_MMLE_2PL(object):
         Take expecation of the log likelihood (L).
         Since L is linear additive, its expectation is also linear additive.
         '''
-        # TODO: better math explanation
         # (1) update the posterior distribution of theta
         self.__update_theta_distr()
 
@@ -281,6 +280,17 @@ class IRT_MMLE_2PL(object):
 
 
     def __update_theta_distr(self):
+        '''
+        # Input:
+        (1) prior density of theta distribution
+        (2) item parameters
+        (3) response data
+
+        calculate p(\theta_t,Y|param_{t+1}), then update p(theta_{t+1}|Y,param_{t+1})
+
+        # output:
+        (1) posterior distribution of theta
+        '''
         for i in xrange(self.data_ref.num_user):
             full_ll_array = np.log(self.theta_density[i, :])
             for s in range(self.num_theta):
@@ -290,20 +300,31 @@ class IRT_MMLE_2PL(object):
             self.theta_density[i, :] = tools.update_posterior_distribution(full_ll_array)
 
     def __get_expect_count(self):
+        '''
+        # Input:
+        (1) user2grade_item : a map of users to item(j)*grade(k) grid
+        (2) distribution of theta
 
-        self.item_expected_right_bytheta = np.zeros((self.num_theta, self.data_ref.num_item))
-        self.item_expected_wrong_bytheta = np.zeros((self.num_theta, self.data_ref.num_item))
+        the expected count of student i answering item j with category k under theta l is
+        p(\theta_{i,l})*Y_{j,k}
+        
+        Thus the population expected count of answering item j with category under theta l is 
+        sum_{i} p(\theta_{i,l})*Y_{j,k}
 
-        for j in range(self.data_ref.num_item):
-            eid = self.data_ref.eid_vec[j]
-            # get all the users that done it right
-            # get all the users that done it wrong
-            right_uid_vec, wrong_uid_vec = self.data_ref.get_rwmap(eid)
-            # condition on the posterior ability, what is the expected count of
-            # students get it right
-            # TODO: for readability, should specify the rows and columns
-            self.item_expected_right_bytheta[:, j] = np.sum(self.theta_density[right_uid_vec, :], axis=0)
-            self.item_expected_wrong_bytheta[:, j] = np.sum(self.theta_density[wrong_uid_vec, :], axis=0)
+
+        # Output:
+        (1) expected count of response variables
+
+        '''
+        # TODO: produce more general unit test
+        # generate the expected count dicitionary
+        self.exp_response_data = [self.data_ref.get_response_space() for l in range(self.num_theta)]
+
+        for l in range(self.num_theta):
+            for eid, grade_map in self.data_ref.user2grade_item.items():
+                for grade, user_list in grade_map.items():
+                    self.exp_response_data[l][eid][grade] = self.theta_density[user_list, l].sum()
+
 
     def __calc_data_likelihood(self):
         # calculate the likelihood for the data set

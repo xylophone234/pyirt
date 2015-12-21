@@ -8,11 +8,6 @@ It is set in this way to deal with the sparsity in the massive dataset.
 
 '''
 import numpy as np
-import time
-import os
-import subprocess
-
-
 import collections as cos
 
 def load_tuples(data):
@@ -61,6 +56,8 @@ def map_response2grade(eids, responses):
     Depends on init_item_user_map
     '''
     #TODO: deal with perfect prediction
+
+    #TODO: deal with response ordering!
     
     # reduce 
     unique_item_response_combo = set(zip(eids, responses))
@@ -86,6 +83,8 @@ def map_ids(ids):
     id_reverse_map = dict(zip(xrange(n),unique_ids))
 
     return id_map, id_reverse_map
+
+
 
 
 class data_storage(object):
@@ -156,6 +155,20 @@ class data_storage(object):
                 uid = log[0]; grade = log[1]
                 self.user2grade_item[eid][grade].append(uid) 
         
+    def get_response_space(self):
+        '''
+        # Input:
+        (1) {eid:{raw_response:grade}}
+
+        for each eid, generate a empty list with the length of number of grade
+
+        # Output:
+        {eid:[0.0,..0.0]}:
+        '''
+        response_space = {}
+        for eid, res_grade_map in self.response_map.items():
+            response_space[eid] = [0.0] * len(res_grade_map.keys())
+        return response_space
 
 '''
 Legacy Code

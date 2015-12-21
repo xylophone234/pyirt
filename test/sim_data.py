@@ -18,7 +18,7 @@ item_param = {0: {'A': [1.0], 'B': [1.0]},
 
 # theta are genreated by normal N(0,2)
 N = 100
-R = 10
+R = 9
 thetas = [norm.rvs()*2 for x in range(N)]
 
 # generate response variables
