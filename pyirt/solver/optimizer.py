@@ -32,9 +32,9 @@ class Mirt_Optimizer(object):
         self.J = J
         
         # transfrom into wendog
-        self.wendog = np.zeros((N,J))
+        self.wendog = np.zeros((N, J))
         for i in range(N):
-            self.wendog[i,Ys[i]] = 1
+            self.wendog[i, Ys[i]] = 1
 
     def solve_param(self, x0):
         target_fnc = lambda params: -self._loglikelihood(params, self.wendog, self.exog, self.K)

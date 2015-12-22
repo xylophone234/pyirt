@@ -106,7 +106,7 @@ class IRT_MMLE_2PL(object):
             # translate eid
             eid = self.data_ref.item_map[out_eid]
             # update
-            self.item_param_dict[eid]['C'] = c
+            self.item_param_dict[eid]['c'] = c
 
     def solve_EM(self):
         # create the inner parameters
@@ -190,43 +190,29 @@ class IRT_MMLE_2PL(object):
 
     def _max_step(self):
         '''
-        Basic Math
-            log likelihood(param_j) = sum_k(log likelihood(param_j, theta_k))
+        # Notes on the solver
+        (1) If it is dichotomous, using the modified 3PL solver
+        The 3PL solver using fixed, rather than estimated guess parameter
+        (2) If it is polynomous, using the modified MNlogit solver
+        The MNlogit does not impose constraints on fixed effect decomposition, ie b_{jk} != b_j+c_k.
+        It does not impose constrains on distinguishing power, i.e. a_{jk} != k*a_{j,1}
+
+        Currently the alogrithm imposes block diagnoal constraints on item parameters.
+        It allows the alogrithm to estimate a large quantity of item parameters without running into the problem of inverting a giantic matrix
+        The price is slower convergence rate and more boundary conditions. 
         '''
-        # [A] max for item parameter
-        opt_worker = optimizer.irt_2PL_Optimizer()
-        # the boundary is universal
-        # the boundary is set regardless of the constrained option because the
-        # constrained search serves as backup for outlier cases
-        opt_worker.set_bounds([self.beta_bnds, self.alpha_bnds])
 
-        # theta value is universal
-        opt_worker.set_theta(self.theta_val)
+        for eid in range(self.data_ref.num_item):
+            #TODO: get rid of the keys step
+            if len(self.data_ref.response_map[eid].keys()) > 2:
+                est_param = self.__solve_MNLogit(eid)
+            else:
+                est_param = self.__solve_3PL(eid)
 
-        for eid in self.data_ref.eid_vec:
-            # set the initial guess as a mixture of current value and a new
-            # start to avoid trap in local maximum
-            initial_guess_val = (self.item_param_dict[eid]['beta'],
-                                 self.item_param_dict[eid]['alpha'])
-
-            opt_worker.set_initial_guess(initial_guess_val)
-            opt_worker.set_c(self.item_param_dict[eid]['c'])
-
-            # assemble the expected data
-            j = self.data_ref.eidx[eid]
-            expected_right_count = self.item_expected_right_bytheta[:, j]
-            expected_wrong_count = self.item_expected_wrong_bytheta[:, j]
-            input_data = [expected_right_count, expected_wrong_count]
-            opt_worker.load_res_data(input_data)
-            # if one wishes to inspect the model input, print the input data
-
-            est_param = opt_worker.solve_param_mix(self.is_constrained)
-
-            # update
-            self.item_param_dict[eid]['beta'] = est_param[0]
-            self.item_param_dict[eid]['alpha'] = est_param[1]
+            self.item_param_dict[eid]['ab'] = est_param
 
         # [B] max for theta density
+        #TODO: resolve the constrained maximization problem
         # pi = r_k/(w_k+r_k)
         r_vec = np.sum(self.item_expected_right_bytheta, axis=1)
         w_vec = np.sum(self.item_expected_wrong_bytheta, axis=1)
@@ -251,6 +237,7 @@ class IRT_MMLE_2PL(object):
 
         if solver_type == 'gradient' and not is_constrained:
             raise Exception('BFGS has to be constrained')
+
 
     def _init_item_param(self):
 
@@ -345,6 +332,78 @@ class IRT_MMLE_2PL(object):
                 ell += clib.log_likelihood_2PL(grade, 1 - grade,
                                                theta, alpha, beta, c)
         return ell
+
+
+    def __solve_3PL(self, eid):
+        '''
+        # Input:
+        (1) initial guess value {'ab':np array[Bs,As], 'c':val}
+        (2) expected item count under theta l
+        (3) theta value vector
+        (4) constraints
+        # Output:
+        np array [beta, alpha]
+        '''
+        # [A] max for item parameter
+        opt_worker = optimizer.irt_2PL_Optimizer()
+        # the boundary is universal
+        # the boundary is set regardless of the constrained option because the
+        # constrained search serves as backup for outlier cases
+        opt_worker.set_bounds([self.beta_bnds, self.alpha_bnds])
+        # theta value is universal
+        opt_worker.set_theta(self.theta_val)
+        initial_guess_val = self.item_param_dict[eid]['ab'].flatten().tolist()
+
+        opt_worker.set_initial_guess(initial_guess_val)
+        if self.item_param_dict[eid]['c'] is None:
+            c_val = 0.0
+        else:
+            c_val = self.item_param_dict[eid]['c'] 
+        opt_worker.set_c(c_val)
+
+        # assemble the expected data
+        expected_right_count = [self.exp_response_data[l][eid][1] for l in range(self.num_theta)]
+        expected_wrong_count = [self.exp_response_data[l][eid][0] for l in range(self.num_theta)]
+
+        input_data = [expected_right_count, expected_wrong_count]
+        opt_worker.load_res_data(input_data)
+        # if one wishes to inspect the model input, print the input data
+
+        est_param = opt_worker.solve_param_mix(self.is_constrained)
+        item_param = np.array(est_param).reshape(2, 1)
+        return item_param
+
+    def __solve_MNLogit(self, eid):
+        '''
+        # Input:
+        (1) initial guess value {'ab':np array[Bs, As]}
+        (2) expected item count under theta l
+        (3) theta value vector
+        '''
+
+        opt_worker = optimizer.Mirt_Optimizer()
+
+        num_y = len(self.data_ref.response_map[eid].keys())
+
+        # generate estimate data
+        sim_ys = []
+        sim_xs = []
+        # TODO: improve efficience here since theta value are fixed
+        # simulation works well in large sample but also quite inefficient
+        for l in range(self.num_theta):
+            for j in range(num_y):
+                sim_cnt = int(self.exp_response_data[l][eid][j])  
+                for t in range(sim_cnt):
+                    sim_ys.append(j)
+                    sim_xs.append([1.0, self.theta_val[l]])
+        # estimate
+        X = np.array(sim_xs)
+        Y = np.array(sim_ys)
+        import ipdb; ipdb.set_trace() # BREAKPOINT
+        opt_worker.load_res_data(Y, X, J=num_y, K=2)
+        item_param = opt_worker.solve_param(self.item_param_dict[eid]['ab'])
+        return item_param
+
 
     def __calc_theta(self):
         self.theta_vec = np.dot(self.theta_density, self.theta_val) 
